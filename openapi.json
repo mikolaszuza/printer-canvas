@@ -1,0 +1,194 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "printer-canvas",
+    "version": "0.1.4",
+    "description": "The routes printer-canvas serves. Every path is relative to the mount the host assigns, and the host serves this document rebased under it at <mount>/openapi.json."
+  },
+  "paths": {
+    "/canvas": {
+      "get": {
+        "operationId": "read-canvas",
+        "summary": "Where every printer sits on the shared canvas",
+        "description": "The position of each placed printer, in canvas units, and how many times the canvas has been saved. A printer the canvas does not name has not been placed yet.",
+        "responses": {
+          "200": {
+            "description": "The canvas.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Canvas"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "move-printers",
+        "summary": "Move printers and add, move, rename or remove labels",
+        "description": "Merges the positions sent into the canvas. Printers the body does not name stay where they are, so two people moving different printers never overwrite each other. A null position takes the printer off the canvas.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tiles": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/Point"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/Label"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "description": "Send tiles, labels or both. Each names only what changes."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The whole canvas after the move.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Canvas"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "500": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Point": {
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "properties": {
+          "x": {
+            "type": "number",
+            "description": "Left edge of the tile, canvas units."
+          },
+          "y": {
+            "type": "number",
+            "description": "Top edge of the tile, canvas units."
+          }
+        }
+      },
+      "Canvas": {
+        "type": "object",
+        "required": [
+          "revision",
+          "tiles",
+          "labels"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "description": "How many times the canvas has been saved; 0 before the first save."
+          },
+          "tiles": {
+            "type": "object",
+            "description": "Printer id to the position of its tile.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Point"
+            }
+          },
+          "saved_by": {
+            "type": "string",
+            "description": "Who the host said moved a printer last."
+          },
+          "saved_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When a printer was moved last."
+          },
+          "labels": {
+            "type": "object",
+            "description": "Label id to the label.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Label"
+            }
+          }
+        }
+      },
+      "Label": {
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "text"
+        ],
+        "properties": {
+          "x": {
+            "type": "number",
+            "description": "Left edge of the label, canvas units."
+          },
+          "y": {
+            "type": "number",
+            "description": "Top edge of the label, canvas units."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "What the label says, such as Hallway shelf."
+          }
+        }
+      }
+    },
+    "responses": {
+      "Problem": {
+        "description": "A refusal with this module's code.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    }
+  }
+}

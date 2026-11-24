@@ -1,0 +1,41 @@
+# Printer Canvas: every printer on one infinite canvas. Drag a printer to move
+# it, drag the background to pan, zoom with Ctrl + wheel or a pinch. Each card
+# shows the printer's name, its state and, while it prints, the progress bar.
+#
+# The namespace is derived by the host from the Go module path in go.mod
+# (github.com/mikolaszuza/printer-canvas -> com.github.aux.mikolaszuza.printer-canvas).
+# It never changes after the first release.
+
+name: printer-canvas
+kind: sink
+version: 0.1.4
+license: MIT
+title: Printer Canvas
+summary: Every printer on one infinite canvas. Drag them where they stand in your room and watch their progress at a glance.
+codeowner: mikolaszuza
+contract_major: 1
+openapi: openapi.json
+platforms:
+  - linux_amd64
+  - linux_arm64
+  - darwin_arm64
+  - windows_amd64
+
+require:
+  core: ">=0.1.0-beta.1"
+
+# One writable directory, for canvas.json: where each printer sits.
+needs:
+  data: true
+
+# No permissions and no events: the module acts only for the person the host
+# authorized. Reading the canvas takes view_resource, moving a printer takes
+# operate_resource on the instance, both decided by the host.
+
+ui:
+  entry: ui/index.js
+  library: ">=0.0.1 <1.0.0"
+  contributes:
+    pages:
+      - path: canvas
+        title: Printer Canvas
