@@ -1,8 +1,7 @@
 MIT License
 
 Copyright (c) 2026 The Printer Canvas authors
-Portions (module scaffolding: main.go, faults.go, the build setup and host.ts)
-Copyright (c) 2026 Jakub Červinka, from connect-fleet-view, also MIT licensed.
+Copyright (c) 2026 Jakub Červinka (module scaffolding from connect-fleet-view)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
