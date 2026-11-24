@@ -7,7 +7,8 @@
 // who may call them before a request reaches this process: a GET needs
 // view_resource on the instance, a PATCH needs operate_resource.
 //
-// Structure taken from fleet-view by jakubdotpy (MIT), see LICENSE.
+// The wire setup follows Prusa's extension template,
+// prusa3d/prusa-connect-extension-example (MIT).
 package main
 
 import (
@@ -32,8 +33,8 @@ const (
 	release = extension.Version("0.1.4")
 )
 
-// canvases holds the store once the host has granted a data directory.
-var canvases atomic.Pointer[canvasStore]
+// canvas is the canvas file, set once the host grants a data directory.
+var canvas atomic.Pointer[canvasFile]
 
 //go:embed openapi.json
 var openAPI []byte
@@ -91,13 +92,7 @@ func methods() wirerpc.Methods {
 					Serves:   []wirerpc.Method{wirerpc.MethodConfigure},
 				}, openAPI)
 		},
-		wirerpc.MethodConfigure: wirerpc.ConfigureGranted(func(_ context.Context, _ struct{}, grants wirerpc.Grants) error {
-			if grants.Data != "" {
-				canvases.Store(&canvasStore{dir: grants.Data})
-			}
-
-			return nil
-		}),
+		wirerpc.MethodConfigure: wirerpc.ConfigureGranted(takeGrants),
 		wirerpc.MethodShutdown: func(context.Context, wirerpc.Call) (any, error) {
 			fmt.Fprintf(os.Stderr, "%s was asked to stop\n", name)
 
@@ -107,10 +102,21 @@ func methods() wirerpc.Methods {
 	}
 }
 
+// takeGrants receives what the operator approved at install. The canvas is
+// kept in the data directory; until one is granted, the canvas routes say
+// there is nowhere to keep it.
+func takeGrants(_ context.Context, _ struct{}, grants wirerpc.Grants) error {
+	if dir := grants.Data; dir != "" {
+		canvas.Store(&canvasFile{dir: dir})
+	}
+
+	return nil
+}
+
 func routes() http.Handler {
 	mux := http.NewServeMux()
 
-	canvasRoutes(mux, canvases.Load)
+	canvasRoutes(mux, canvas.Load)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		refuse(w, r, RouteNotFound.

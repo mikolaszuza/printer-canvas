@@ -1,5 +1,13 @@
-# Builds and checks printer-canvas against a pinned Prusa Connect checkout, because
-# neither the Go SDK nor the @prusa packages are published yet.
+# Build, test and package this extension.
+#
+#   make core      fetch the pinned Prusa Connect checkout into .core/
+#   make check     everything CI runs: Go vet and tests, the UI's lint, format and types
+#   make release   the release directory the marketplace takes, in release/
+#   make install   install release/ into a local Prusa Connect data dir, to try it
+#
+# Until the Prusa Connect SDK and the @prusa npm packages are published, both
+# halves build against a checkout of Prusa Connect at CORE_REF. Raise CORE_REF
+# to build against a newer core, and raise `require.core` in module.yaml with it.
 
 CORE_REPO ?= https://github.com/prusa3d/prusa-connect.git
 CORE_REF ?= v0.1.0-beta.1
@@ -15,13 +23,18 @@ export CI ?= true
 
 .PHONY: core check go-check ui-check ui-build release install clean
 
+# The checkout is cloned once. To move to another CORE_REF, `rm -rf .core`
+# first.
 $(CORE)/.git:
 	git -c advice.detachedHead=false clone --quiet --depth 1 --branch $(CORE_REF) $(CORE_REPO) $(CORE)
 
+# The component library ships the Vite configuration the bundle builds with,
+# through its `build` export, which points at the library's dist.
 $(CORE)/packages/svelte/dist/build/module.js: | $(CORE)/.git
 	cd $(CORE)/packages/svelte && pnpm install --frozen-lockfile
 	cd $(CORE)/packages/svelte && pnpm run build
 
+# The core's typed client (@prusa/connect), which the bundle calls the server with.
 $(CORE)/packages/typescript/dist/index.js: | $(CORE)/.git
 	cd $(CORE)/packages/typescript && pnpm install --frozen-lockfile
 	cd $(CORE)/packages/typescript && pnpm run build
@@ -30,7 +43,7 @@ core: $(CORE)/packages/svelte/dist/build/module.js $(CORE)/packages/typescript/d
 
 check: go-check ui-check
 
-go-check: | $(CORE)/.git
+go-check: core
 	go vet ./...
 	go test ./...
 

@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestAPathThisModuleDoesNotServeIsRefusedByCode is the refusal half. A client
@@ -65,99 +64,131 @@ func TestNoSettingIsReadFromTheEnvironment(t *testing.T) {
 	}
 }
 
-// TestMovesMergeSoNobodyOverwritesAnotherPrinter holds the one rule of the
-// shared canvas: a patch moves only the printers it names.
-func TestMovesMergeSoNobodyOverwritesAnotherPrinter(t *testing.T) {
-	store := &canvasStore{dir: t.TempDir()}
+// canvasServer serves the canvas routes over a fresh data directory, the way
+// the host does once it has granted one.
+func canvasServer(t *testing.T) (http.Handler, *canvasFile) {
+	t.Helper()
+
+	file := &canvasFile{dir: t.TempDir()}
 	mux := http.NewServeMux()
-	canvasRoutes(mux, func() *canvasStore { return store })
+	canvasRoutes(mux, func() *canvasFile { return file })
 
-	patch := func(body string) *httptest.ResponseRecorder {
-		recorder := httptest.NewRecorder()
-		mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPatch, "/canvas", strings.NewReader(body)))
+	return mux, file
+}
 
-		return recorder
+func send(t *testing.T, h http.Handler, method, body string) (int, Canvas) {
+	t.Helper()
+
+	recorder := httptest.NewRecorder()
+	h.ServeHTTP(recorder, httptest.NewRequest(method, "/canvas", strings.NewReader(body)))
+
+	var c Canvas
+	if recorder.Code == http.StatusOK {
+		if err := json.Unmarshal(recorder.Body.Bytes(), &c); err != nil {
+			t.Fatalf("%s /canvas answered something that is not a canvas: %v: %s", method, err, recorder.Body)
+		}
 	}
 
-	read := func() Canvas {
-		recorder := httptest.NewRecorder()
-		mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/canvas", nil))
+	return recorder.Code, c
+}
 
-		var canvas Canvas
-		if err := json.Unmarshal(recorder.Body.Bytes(), &canvas); err != nil {
-			t.Fatalf("the canvas is not JSON: %v: %s", err, recorder.Body)
+// TestChangesMergeInsteadOfOverwriting holds the rule of the shared canvas:
+// a change touches only the printers and labels it names, in the order sent.
+func TestChangesMergeInsteadOfOverwriting(t *testing.T) {
+	server, _ := canvasServer(t)
+
+	if code, c := send(t, server, http.MethodGet, ""); code != http.StatusOK || c.Revision != 0 || len(c.Tiles)+len(c.Labels) != 0 {
+		t.Fatalf("a canvas nobody changed answered %d with %+v", code, c)
+	}
+
+	steps := []struct {
+		change string
+		check  func(Canvas) bool
+	}{
+		{`{"tiles": {"a": {"x": 10.4, "y": 20}, "b": {"x": 0, "y": 0}}}`,
+			func(c Canvas) bool { return c.Tiles["a"] == Point{10, 20} && len(c.Tiles) == 2 }},
+		{`{"tiles": {"b": {"x": -300, "y": 40}}}`,
+			func(c Canvas) bool { return c.Tiles["a"] == Point{10, 20} && c.Tiles["b"] == Point{-300, 40} }},
+		{`{"tiles": {"a": null}}`,
+			func(c Canvas) bool { _, gone := c.Tiles["a"]; return !gone && len(c.Tiles) == 1 }},
+		{`{"labels": {"shelf": {"x": 0, "y": -60, "text": "  Hallway shelf "}}}`,
+			func(c Canvas) bool { return c.Labels["shelf"].Text == "Hallway shelf" && len(c.Tiles) == 1 }},
+		{`{"labels": {"shelf": null}}`,
+			func(c Canvas) bool { return len(c.Labels) == 0 && len(c.Tiles) == 1 }},
+	}
+
+	for i, step := range steps {
+		code, c := send(t, server, http.MethodPatch, step.change)
+		if code != http.StatusOK || c.Revision != i+1 || !step.check(c) {
+			t.Fatalf("change %d %s answered %d with %+v", i+1, step.change, code, c)
 		}
 
-		return canvas
-	}
-
-	if got := read(); got.Revision != 0 || len(got.Tiles) != 0 {
-		t.Fatalf("a fresh canvas reads %+v, want revision 0 and no tiles", got)
-	}
-
-	if got := patch(`{"tiles": {"a": {"x": 10.4, "y": 20}, "b": {"x": 0, "y": 0}}}`); got.Code != http.StatusOK {
-		t.Fatalf("the first move answered %d: %s", got.Code, got.Body)
-	}
-
-	if got := patch(`{"tiles": {"b": {"x": -300, "y": 40}}}`); got.Code != http.StatusOK {
-		t.Fatalf("the second move answered %d: %s", got.Code, got.Body)
-	}
-
-	got := read()
-	if got.Revision != 2 || got.Tiles["a"] != (Point{10, 20}) || got.Tiles["b"] != (Point{-300, 40}) {
-		t.Fatalf("after two moves the canvas reads %+v", got)
-	}
-
-	if got := patch(`{"tiles": {"a": null}}`); got.Code != http.StatusOK {
-		t.Fatalf("taking a printer off answered %d: %s", got.Code, got.Body)
-	}
-
-	if got := read(); len(got.Tiles) != 1 {
-		t.Fatalf("a null point left %d tiles, want 1", len(got.Tiles))
-	}
-
-	if got := patch(`{"labels": {"l1": {"x": 0, "y": -60, "text": "  Hallway shelf "}}}`); got.Code != http.StatusOK {
-		t.Fatalf("adding a label answered %d: %s", got.Code, got.Body)
-	}
-
-	if got := read(); got.Labels["l1"].Text != "Hallway shelf" || len(got.Tiles) != 1 {
-		t.Fatalf("after adding a label the canvas reads %+v", got)
-	}
-
-	if got := patch(`{"labels": {"l1": null}}`); got.Code != http.StatusOK || len(read().Labels) != 0 {
-		t.Fatalf("removing a label answered %d: %s", got.Code, got.Body)
-	}
-
-	for _, body := range []string{
-		`{}`,
-		`{"tiles": []}`,
-		`{"labels": {"l": {"x": 0, "y": 0, "text": "   "}}}`,
-		`{"labels": {"l": {"x": 0, "y": 0, "text": "` + strings.Repeat("a", 121) + `"}}}`,
-		`{"tiles": {"": {"x": 0, "y": 0}}}`,
-		`{"tiles": {"a": {"x": 1e9, "y": 0}}}`,
-		`{"tiles": {"` + strings.Repeat("x", 200) + `": {"x": 0, "y": 0}}}`,
-		`not json`,
-	} {
-		if got := patch(body); got.Code != http.StatusBadRequest {
-			t.Fatalf("%.60s answered %d, want 400", body, got.Code)
+		if _, again := send(t, server, http.MethodGet, ""); again.Revision != c.Revision {
+			t.Fatalf("after change %d the saved canvas is at revision %d, want %d", i+1, again.Revision, c.Revision)
 		}
 	}
 }
 
-// TestAnUnreadableCanvasCanBeSavedOver: a file a crash left empty must not
-// lock everyone out, so it reads as nothing saved and the next move repairs it.
-func TestAnUnreadableCanvasCanBeSavedOver(t *testing.T) {
-	store := &canvasStore{dir: t.TempDir()}
-	if err := os.WriteFile(store.path(), nil, 0o600); err != nil {
+// TestChangesThatCannotApplyAreRefused: each of these answers 400 with the
+// module's code and leaves the canvas as it was.
+func TestChangesThatCannotApplyAreRefused(t *testing.T) {
+	server, _ := canvasServer(t)
+
+	for _, change := range []string{
+		`{}`,
+		`{"tiles": []}`,
+		`{"labels": {"l": {"x": 0, "y": 0, "text": "   "}}}`,
+		`{"labels": {"l": {"x": 0, "y": 0, "text": "` + strings.Repeat("a", maxLabelText+1) + `"}}}`,
+		`{"tiles": {"": {"x": 0, "y": 0}}}`,
+		`{"tiles": {"a": {"x": 1e9, "y": 0}}}`,
+		`{"tiles": {"` + strings.Repeat("x", maxIDLen+1) + `": {"x": 0, "y": 0}}}`,
+		`not json`,
+	} {
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPatch, "/canvas", strings.NewReader(change)))
+
+		if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), BadCanvasChange.Code().String()) {
+			t.Fatalf("%.60s answered %d: %s", change, recorder.Code, recorder.Body)
+		}
+	}
+
+	if _, c := send(t, server, http.MethodGet, ""); c.Revision != 0 {
+		t.Fatalf("refused changes moved the canvas to revision %d", c.Revision)
+	}
+}
+
+// TestACutShortFileIsRepairedByTheNextChange: a file a crash left empty must
+// not lock everyone out, so it reads as an empty canvas and the next change
+// saves over it.
+func TestACutShortFileIsRepairedByTheNextChange(t *testing.T) {
+	server, file := canvasServer(t)
+	if err := os.WriteFile(file.path(), []byte(`{"revision": 4, "tiles": {"a"`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	if canvas, err := store.load(); err != nil || canvas.Revision != 0 {
-		t.Fatalf("an empty file read as revision %d, %v; want 0", canvas.Revision, err)
+	if code, c := send(t, server, http.MethodGet, ""); code != http.StatusOK || c.Revision != 0 {
+		t.Fatalf("a cut-short file answered %d at revision %d, want an empty canvas", code, c.Revision)
 	}
 
-	x := 5.0
-	if _, err := store.apply(Patch{Tiles: map[string]*Point{"a": {X: x, Y: x}}}, "user:test", time.Now()); err != nil {
-		t.Fatalf("a move over an empty file failed: %v", err)
+	if code, c := send(t, server, http.MethodPatch, `{"tiles": {"a": {"x": 5, "y": 5}}}`); code != http.StatusOK || c.Revision != 1 {
+		t.Fatalf("a change over a cut-short file answered %d at revision %d", code, c.Revision)
+	}
+
+	if _, err := os.Stat(file.path() + ".next"); !os.IsNotExist(err) {
+		t.Fatalf("the save left its sibling file behind: %v", err)
+	}
+}
+
+// TestWithoutADataDirectoryTheCanvasSaysSo: a module installed without the
+// directory it asks for answers with its code, not a crash.
+func TestWithoutADataDirectoryTheCanvasSaysSo(t *testing.T) {
+	mux := http.NewServeMux()
+	canvasRoutes(mux, func() *canvasFile { return nil })
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/canvas", nil))
+
+	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), NowhereToSave.Code().String()) {
+		t.Fatalf("no data directory answered %d: %s", recorder.Code, recorder.Body)
 	}
 }

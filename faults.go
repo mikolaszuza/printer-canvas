@@ -14,15 +14,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 
 	"github.com/prusa3d/prusa-connect/sdk/fault"
 )
 
 // faultDomain is the first half of every code below. It is this module's
-// namespace, which the host derived from the Go module path github.com/mikolaszuza/printer-canvas (change both when the module moves), so no
-// other author can register a code under it. The sdk refuses the core
-// namespace, which is what keeps this module's codes apart from the server's.
+// namespace, which the host derives from the Go module path in go.mod
+// (github.com/mikolaszuza/printer-canvas), so no other author can register a
+// code under it. The sdk refuses the core namespace, which is what keeps this
+// module's codes apart from the server's.
 //
 //nolint:gochecknoglobals // a domain built once at start-up; a const cannot hold one.
 var faultDomain = mustDomain("com.github.aux.mikolaszuza.printer-canvas")
@@ -41,28 +41,26 @@ var (
 		"path",
 	))
 
-	// LayoutChanged is a save that named a version someone else has saved over.
-
-	// LayoutInvalid is a save whose body is not a layout.
-	LayoutInvalid = fault.Register(faultDomain, "LAYOUT_INVALID", http.StatusBadRequest, fault.Document(
-		"The body is not a layout",
-		"Send {\"tiles\": {\"<printer id>\": {\"x\": 0, \"y\": 0} or null}}, with at most 5000 printers and whole-number coordinates within one million of the origin.",
+	// BadCanvasChange is a change to the canvas that cannot be applied as sent.
+	BadCanvasChange = fault.Register(faultDomain, "BAD_CANVAS_CHANGE", http.StatusBadRequest, fault.Document(
+		"That change to the canvas cannot be applied",
+		"Send {\"tiles\": {\"<printer id>\": {\"x\": 0, \"y\": 0} or null}, \"labels\": {\"<label id>\": {\"x\": 0, \"y\": 0, \"text\": \"Shelf\"} or null}}. Coordinates stay within one million of the origin, a label holds 1 to 120 characters, and the canvas holds at most 5000 printers and 500 labels.",
 		fault.RetryNever,
 		fault.ShowDetail,
 	))
 
-	// LayoutUnreadable is a layout file this process cannot read or write.
-	LayoutUnreadable = fault.Register(faultDomain, "LAYOUT_UNREADABLE", http.StatusInternalServerError, fault.Document(
-		"The layout file could not be read or written",
-		"Check the module's data directory: its permissions, free space, and that canvas.json there is JSON.",
+	// CanvasFileFailed is a canvas file the process could not read or replace.
+	CanvasFileFailed = fault.Register(faultDomain, "CANVAS_FILE_FAILED", http.StatusInternalServerError, fault.Document(
+		"The canvas could not be read or saved",
+		"Look at the server log for the reason, then at the module's data directory: its permissions and free space.",
 		fault.RetryAllowed,
 		fault.RedactDetail,
 	))
 
-	// NoDataDirectory is a module the operator granted no data directory.
-	NoDataDirectory = fault.Register(faultDomain, "NO_DATA_DIRECTORY", http.StatusServiceUnavailable, fault.Document(
-		"Printer Canvas has nowhere to keep the layout",
-		"Install the module again and approve its data directory.",
+	// NowhereToSave is a module installed without the data directory it asks for.
+	NowhereToSave = fault.Register(faultDomain, "NOWHERE_TO_SAVE", http.StatusServiceUnavailable, fault.Document(
+		"Printer Canvas has no place to keep the canvas",
+		"Install the module again and approve the data directory it asks for.",
 		fault.RetryNever,
 		fault.ShowDetail,
 	))
@@ -85,11 +83,6 @@ func mustDomain(name string) fault.Domain {
 // the code, the English sentence, the values that sentence names, and where the
 // code is documented.
 func refuse(w http.ResponseWriter, r *http.Request, raised *fault.Fault) {
-	// A redacted detail leaves the answer, so the log is the only place it is read.
-	if raised.Redacted() {
-		fmt.Fprintf(os.Stderr, "%s: %s: %s\n", name, raised.Code(), raised.Message())
-	}
-
 	problem := raised.ProblemJSON(r.URL.Path)
 
 	w.Header().Set("Content-Type", "application/problem+json")
